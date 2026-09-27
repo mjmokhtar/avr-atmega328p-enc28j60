@@ -116,8 +116,17 @@ uint8_t ip_input(uint16_t len) {
     }
 #endif
 
-    if (protocol == IP_PROTO_UDP || protocol == IP_PROTO_TCP)
+    if (protocol == IP_PROTO_UDP || protocol == IP_PROTO_TCP) {
+        // Ajarin cache ARP dari MAC pengirim yang BARU KITA TERIMA, sebelum
+        // udp.c/tcp.c sempat balas. Tanpa ini, balasan pertama (UDP reply /
+        // TCP SYN-ACK) ke host yang belum pernah "dikenal" bakal gagal
+        // sekali (nunggu 1 round-trip ARP dulu) - ketahuan pas testing:
+        // percobaan TCP connect pertama sering "Could not connect" karena
+        // client keburu timeout duluan sebelum ARP kita selesai, padahal
+        // firmware sebenarnya cuma butuh sedikit lebih lama buat retry.
+        eth_arp_learn(net_buf + IP_SRC_P, net_buf + ETH_SRC_MAC_P);
         return protocol; // udp.c / tcp.c yang lanjut proses payload
+    }
 
     return 0; // protokol IP lain, tidak kita layani
 }

@@ -15,6 +15,7 @@ extern uint8_t net_my_mac[6];
 extern uint8_t net_my_ip[4];
 extern uint8_t net_netmask[4];
 extern uint8_t net_gw_ip[4];
+extern uint8_t net_dns_ip[4];       // DNS server dari opsi DHCP 6 (0.0.0.0 kalau server gak kasih)
 extern uint8_t net_broadcast_ip[4]; // dihitung otomatis dari my_ip | ~netmask
 
 // True kalau device sudah punya IP valid (bukan 0.0.0.0) — dipakai layer

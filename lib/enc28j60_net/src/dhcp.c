@@ -39,6 +39,7 @@
 
 #define DHCP_OPT_SUBNET_MASK    1
 #define DHCP_OPT_ROUTER         3
+#define DHCP_OPT_DNS            6
 #define DHCP_OPT_LEASE_TIME     51
 #define DHCP_OPT_MSG_TYPE       53
 #define DHCP_OPT_SERVER_ID      54
@@ -64,6 +65,16 @@ static void dhcp_send(uint8_t msg_type, const uint8_t *requested_ip) {
     base[DHCP_XID_P + 1] = (uint8_t) (s_xid >> 16);
     base[DHCP_XID_P + 2] = (uint8_t) (s_xid >> 8);
     base[DHCP_XID_P + 3] = (uint8_t) s_xid;
+    // Set bit "broadcast" (0x8000) di flags field (offset 10-11, BOOTP) -
+    // paksa server SELALU balas OFFER/ACK ke 255.255.255.255, bukan
+    // unicast ke IP yang ditawarkan. Ini WAJIB: kita belum punya IP sama
+    // sekali di titik ini, jadi kalau server unicast (banyak router
+    // rumahan begitu, lewat MAC dari CHADDR), paketnya sampai secara
+    // fisik tapi DIBUANG oleh filter eth_input() kita sendiri (IP tujuan
+    // gak cocok net_my_ip yang masih 0.0.0.0) - inilah kenapa DHCP bisa
+    // "gantung" gak pernah dapat IP walau link fisik sudah up.
+    base[10] = 0x80;
+    base[11] = 0x00;
     if (s_state == DHCP_STATE_BOUND || s_state == DHCP_STATE_RENEWING)
         memcpy(base + 12 /* ciaddr */, net_my_ip, 4);
     memcpy(base + DHCP_CHADDR_P, net_my_mac, 6);
@@ -162,6 +173,12 @@ static void dhcp_on_packet(const uint8_t src_ip[4], uint16_t src_port,
 
             opt = dhcp_find_option(data, len, DHCP_OPT_ROUTER, &opt_len);
             if (opt && opt_len == 4) memcpy(net_gw_ip, opt, 4);
+
+            // Opsi 6 bisa berisi lebih dari 1 alamat DNS (opt_len kelipatan
+            // 4) - kita cuma ambil yang pertama, cukup buat kebutuhan device
+            // ini (gak ada resolver DNS di v1, cuma disimpan buat info/log).
+            opt = dhcp_find_option(data, len, DHCP_OPT_DNS, &opt_len);
+            if (opt && opt_len >= 4) memcpy(net_dns_ip, opt, 4);
 
             opt = dhcp_find_option(data, len, DHCP_OPT_LEASE_TIME, &opt_len);
             if (!opt) opt = dhcp_find_option(data, len, DHCP_OPT_RENEWAL_TIME, &opt_len);

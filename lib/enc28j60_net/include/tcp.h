@@ -48,6 +48,14 @@ uint8_t tcp_send(uint8_t session_id, const uint8_t *data, uint16_t len);
 // Tutup sesi (kirim FIN, bebaskan slot).
 void tcp_close(uint8_t session_id);
 
+// Ambil IP+port remote dari 1 sesi aktif - dipakai buat logging/debug di
+// callback (tcp_callback_t cuma dikasih session_id, gak ada info alamat).
+// out_remote_ip/out_remote_port boleh NULL kalau salah satu gak dibutuhkan.
+// Return 1 kalau session_id valid & aktif, 0 kalau tidak (isi output gak
+// diubah kalau return 0).
+uint8_t tcp_get_session_info(uint8_t session_id, uint8_t out_remote_ip[4],
+                             uint16_t *out_remote_port);
+
 // Dipanggil dispatcher utama setelah ip_input() return IP_PROTO_TCP.
 void tcp_input(uint16_t len);
 

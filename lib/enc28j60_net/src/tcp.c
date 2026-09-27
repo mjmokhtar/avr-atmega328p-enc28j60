@@ -181,6 +181,20 @@ uint8_t tcp_send(uint8_t session_id, const uint8_t *data, uint16_t len) {
     return tcp_build_and_send(s, TCP_FLAG_PUSH | TCP_FLAG_ACK, data, len);
 }
 
+uint8_t tcp_get_session_info(uint8_t session_id, uint8_t out_remote_ip[4],
+                             uint16_t *out_remote_port) {
+    if (session_id >= NET_MAX_TCP_SESSIONS)
+        return 0;
+    tcp_session_t *s = &s_sessions[session_id];
+    if (!s->active)
+        return 0;
+    if (out_remote_ip)
+        memcpy(out_remote_ip, s->remote_ip, 4);
+    if (out_remote_port)
+        *out_remote_port = s->remote_port;
+    return 1;
+}
+
 void tcp_close(uint8_t session_id) {
     if (session_id >= NET_MAX_TCP_SESSIONS)
         return;

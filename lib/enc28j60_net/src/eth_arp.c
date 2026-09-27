@@ -112,6 +112,18 @@ uint8_t eth_resolve_mac(const uint8_t dst_ip[4], uint8_t out_mac[6]) {
     }
 }
 
+void eth_arp_learn(const uint8_t ip[4], const uint8_t mac[6]) {
+    // Isi langsung slot cache tujuan, TANPA kirim ARP request - kita baru
+    // saja terima frame ini, jadi MAC-nya sudah pasti benar. Kalau ip ini
+    // di LUAR subnet kita, eth_resolve_mac() gak akan pernah cek slot ini
+    // buat dst_ip itu (dia lewat cabang gateway), jadi aman-aman saja -
+    // cuma jadi cache "nganggur" yang nanti ke-replace kalau ada host lain.
+    memcpy(s_dest_ip, ip, 4);
+    memcpy(s_dest_mac, mac, 6);
+    s_dest_mac_valid = 1;
+    s_dest_pending = 0;
+}
+
 void eth_build_header(const uint8_t dst_mac[6], uint16_t ethertype) {
     memcpy(net_buf + ETH_DST_MAC_P, dst_mac, 6);
     memcpy(net_buf + ETH_SRC_MAC_P, net_my_mac, 6);

@@ -40,8 +40,18 @@
 // ---------------------------------------------------------------------
 static const uint8_t MY_MAC[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
 
+// Port demo UDP echo & TCP echo - ganti di sini kalau mau port lain,
+// gak perlu cari-cari lagi di dalam main() (dipakai di udp_listen()/
+// tcp_listen() di bawah, dan komentar contoh netcat).
+#define DEMO_UDP_ECHO_PORT  5000
+#define DEMO_TCP_ECHO_PORT  8080
+
 #define UART_BAUD  38400UL
 #define UART_UBRR  ((F_CPU / (16UL * UART_BAUD)) - 1)
+
+// Batas panjang isi paket yang di-print ke serial - biar 1 paket gede gak
+// nge-spam serial berlebihan (UART 38400 baud lumayan lambat).
+#define UART_DATA_PRINT_MAX  48
 
 // -------------------------- UART debug (TX only) ----------------------
 static void uart_init(void) {
@@ -68,29 +78,82 @@ static void uart_print_ip(const uint8_t ip[4]) {
     uart_print(buf);
 }
 
+static void uart_print_ipport(const uint8_t ip[4], uint16_t port) {
+    uart_print_ip(ip);
+    char buf[8];
+    snprintf(buf, sizeof buf, ":%u", port);
+    uart_print(buf);
+}
+
+// Print isi data apa adanya (byte mentah, bukan lewat snprintf) - dibatasi
+// panjangnya biar 1 paket gede gak nge-spam serial berlebihan. data
+// menunjuk ke net_buf, JANGAN dipanggil setelah paket berikutnya diterima
+// (sama seperti aturan pointer di udp.h/tcp.h).
+static void uart_print_data(const uint8_t *data, uint16_t len) {
+    uint16_t n = (len > UART_DATA_PRINT_MAX) ? UART_DATA_PRINT_MAX : len;
+    for (uint16_t i = 0; i < n; i++)
+        uart_putc((char) data[i]);
+    if (len > n)
+        uart_print("...(dipotong)");
+}
+
 // ---------------------------- Handler UDP echo -------------------------
 // Kirim balik apa pun yang diterima, ke pengirim yang sama - buat tes
-// cepat pakai netcat: `nc -u <ip-device> 5000`
+// cepat pakai netcat: `nc -u <ip-device> <DEMO_UDP_ECHO_PORT>`
+//
+// Format serial buat dibaca aplikasi lain (mis. ESP32): SATU BARIS per
+// pesan, "UDP:" diikuti isi data mentah, diakhiri newline. ESP32 tinggal
+// Serial.readStringUntil('\n') lalu buang 4 karakter awal ("UDP:") -
+// gak perlu decode panjang, gak perlu potong tanda kutip, gak ada baris
+// lain yang bikin bingung. Batasan: isi data JANGAN mengandung byte '\r'
+// atau '\n' sendiri (bakal motong baris lebih cepat dari seharusnya) -
+// aman buat teks pendek biasa, bukan buat data biner sembarang.
 static void on_udp_echo(const uint8_t src_ip[4], uint16_t src_port,
                         uint16_t dst_port, const uint8_t *data, uint16_t len) {
+    // Baris info pengirim TERPISAH dari baris data "UDP:..." - sengaja
+    // BUKAN "koneksi baru" (UDP gak punya sesi, ini cuma info per-paket,
+    // dicetak tiap kali ada data masuk, bukan sekali di awal kayak TCP).
     uart_print("[UDP] dari ");
-    uart_print_ip(src_ip);
-    uart_print(", data diterima, echo balik...\r\n");
+    uart_print_ipport(src_ip, src_port);
+    uart_print("\r\n");
+
+    uart_print("UDP:");
+    uart_print_data(data, len);
+    uart_print("\r\n");
+
     udp_send(dst_port, src_ip, src_port, data, len);
 }
 
 // ---------------------------- Handler TCP echo -------------------------
-// Port 7 = port "echo" klasik. Tes pakai: `nc <ip-device> 7`
+// DEMO_TCP_ECHO_PORT default 7 (port "echo" klasik). Tes pakai:
+// `nc <ip-device> <DEMO_TCP_ECHO_PORT>`
 static void on_tcp_echo(uint8_t session_id, tcp_event_t event,
                         const uint8_t *data, uint16_t len) {
+    uint8_t remote_ip[4];
+    uint16_t remote_port = 0;
+    uint8_t have_info = tcp_get_session_info(session_id, remote_ip, &remote_port);
+
     switch (event) {
     case TCP_EVENT_CONNECTED:
-        uart_print("[TCP] sesi baru terhubung\r\n");
+        uart_print("[TCP] koneksi baru");
+        if (have_info) {
+            uart_print(" dari ");
+            uart_print_ipport(remote_ip, remote_port);
+        }
+        uart_print("\r\n");
         break;
+
     case TCP_EVENT_DATA:
-        uart_print("[TCP] data diterima, echo balik...\r\n");
+        // Format sama seperti UDP di atas: 1 baris, prefix "TCP:", isi
+        // data mentah, newline - konsisten & gampang di-parsing sisi
+        // aplikasi lain (cukup beda prefix-nya buat bedain sumbernya).
+        uart_print("TCP:");
+        uart_print_data(data, len);
+        uart_print("\r\n");
+
         tcp_send(session_id, data, len);
         break;
+
     case TCP_EVENT_CLOSED:
         uart_print("[TCP] sesi ditutup\r\n");
         break;
@@ -161,8 +224,17 @@ int main(void) {
     }
 #endif
 
-    udp_listen(5000, on_udp_echo);
-    tcp_listen(7, on_tcp_echo);
+    udp_listen(DEMO_UDP_ECHO_PORT, on_udp_echo);
+    tcp_listen(DEMO_TCP_ECHO_PORT, on_tcp_echo);
+    {
+        char buf[48];
+        snprintf(buf, sizeof buf, "[boot] UDP echo listen di port %u\r\n",
+                 (unsigned) DEMO_UDP_ECHO_PORT);
+        uart_print(buf);
+        snprintf(buf, sizeof buf, "[boot] TCP echo listen di port %u\r\n",
+                 (unsigned) DEMO_TCP_ECHO_PORT);
+        uart_print(buf);
+    }
 
     uint8_t had_ip = 0;
     uint32_t last_status_ms = millis_now();
@@ -187,8 +259,18 @@ int main(void) {
 
         if (!had_ip && net_has_ip()) {
             had_ip = 1;
-            uart_print("[net] dapat IP: ");
+            // Format 1-baris sama seperti "UDP:"/"TCP:" - prefix "NET:",
+            // isinya key=value dipisah ';'. ESP32 tinggal startsWith("NET:")
+            // lalu pecah per ';' dan per '=' - gak perlu parsing 4 baris
+            // terpisah kayak sebelumnya.
+            uart_print("NET:ip=");
             uart_print_ip(net_my_ip);
+            uart_print(";mask=");
+            uart_print_ip(net_netmask);
+            uart_print(";gw=");
+            uart_print_ip(net_gw_ip);
+            uart_print(";dns=");
+            uart_print_ip(net_dns_ip); // 0.0.0.0 kalau server DHCP gak kasih opsi 6
             uart_print("\r\n");
         }
 

@@ -5,6 +5,7 @@ uint8_t net_my_mac[6]      = {0, 0, 0, 0, 0, 0};
 uint8_t net_my_ip[4]       = {0, 0, 0, 0};
 uint8_t net_netmask[4]     = {255, 255, 255, 0};
 uint8_t net_gw_ip[4]       = {0, 0, 0, 0};
+uint8_t net_dns_ip[4]      = {0, 0, 0, 0};
 uint8_t net_broadcast_ip[4] = {0, 0, 0, 0};
 
 uint8_t net_has_ip(void) {

@@ -23,6 +23,16 @@ void arp_poll(void);
 // layar, caller cukup coba lagi di iterasi loop berikutnya.
 uint8_t eth_resolve_mac(const uint8_t dst_ip[4], uint8_t out_mac[6]);
 
+// "Ajarin" cache ARP secara paksa dari MAC yang BARU KITA TERIMA (misal
+// pas ip_input() dapat paket dari ip/mac tertentu) - TANPA kirim ARP
+// request, langsung isi slot cache tujuan. Dipakai supaya balasan
+// pertama (UDP reply / TCP SYN-ACK) ke pengirim itu gak perlu nunggu
+// 1 round-trip ARP lagi - kita kan baru saja "dengar" MAC-nya langsung
+// dari frame yang diterima, jadi gak perlu tanya ulang lewat ARP.
+// Aman dipanggil untuk IP di luar subnet juga (cache-nya cuma gak akan
+// pernah dipakai eth_resolve_mac() buat kasus itu, lihat komentar di .c).
+void eth_arp_learn(const uint8_t ip[4], const uint8_t mac[6]);
+
 // Tulis header Ethernet (dst MAC, src MAC = net_my_mac, ethertype) ke
 // net_buf[0..13]. Payload (ARP/IP) ditulis layer pemanggil di offset 14+.
 void eth_build_header(const uint8_t dst_mac[6], uint16_t ethertype);
