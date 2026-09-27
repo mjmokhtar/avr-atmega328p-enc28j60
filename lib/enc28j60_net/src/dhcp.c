@@ -240,3 +240,16 @@ void dhcp_poll(void) {
 dhcp_state_t dhcp_get_state(void) {
     return s_state;
 }
+
+void dhcp_force_renew(void) {
+    if (s_state != DHCP_STATE_BOUND)
+        return; // biarkan transaksi yang sedang berjalan selesai dulu
+
+    // xid baru - ini transaksi baru dari sudut pandang server, walau
+    // masih minta IP lama (mirip persis jalur normal BOUND->RENEWING di
+    // dhcp_poll(), cuma dipicu link-recovery, bukan lease timer habis).
+    s_xid = millis_now();
+    dhcp_send(DHCP_MSG_REQUEST, net_my_ip);
+    s_state = DHCP_STATE_RENEWING;
+    s_state_timer = millis_now();
+}

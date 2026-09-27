@@ -61,6 +61,22 @@
 #define NET_STATIC_GATEWAY  {192, 168, 1, 1}
 #endif
 
+// ---------------------------------------------------------------------
+// Renew DHCP otomatis saat link fisik pulih (opsional, lihat main.c)
+// ---------------------------------------------------------------------
+// Kalau link ENC28J60 down selama >= NET_LINK_DOWN_RENEW_MS lalu pulih
+// lagi, main.c memanggil dhcp_force_renew() (konfirmasi ulang lease ke
+// server, BUKAN discover dari nol - lihat komentar di dhcp.h) - jaga-jaga
+// kalau selama device "hilang" itu, kabelnya dipindah ke jaringan/switch
+// lain, atau IP-nya sempat dikasih ke device lain oleh server.
+//
+// Threshold ini SENGAJA tidak terlalu kecil - kedipan sesaat (order
+// puluhan/ratusan ms, misal gara-gara noise power supply) TIDAK akan
+// memicu ini, supaya gak spam DHCPREQUEST tiap kali link kedip sebentar.
+// Naikkan kalau jaringan kamu punya link-flap normal yang lebih lama dari
+// ini (switch yang lambat re-negotiate, dst).
+#define NET_LINK_DOWN_RENEW_MS  3000UL
+
 // Jumlah slot — bukan array besar EtherCard (8 sesi), disesuaikan RAM kecil.
 // NET_MAX_TCP_LISTENERS = berapa port yang boleh di-tcp_listen() (server).
 // NET_MAX_TCP_SESSIONS   = berapa KONEKSI aktif sekaligus (client + hasil

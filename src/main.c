@@ -44,7 +44,7 @@ static const uint8_t MY_MAC[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
 // gak perlu cari-cari lagi di dalam main() (dipakai di udp_listen()/
 // tcp_listen() di bawah, dan komentar contoh netcat).
 #define DEMO_UDP_ECHO_PORT  5000
-#define DEMO_TCP_ECHO_PORT  8080
+#define DEMO_TCP_ECHO_PORT  7
 
 #define UART_BAUD  38400UL
 #define UART_UBRR  ((F_CPU / (16UL * UART_BAUD)) - 1)
@@ -237,7 +237,18 @@ int main(void) {
     }
 
     uint8_t had_ip = 0;
+    uint8_t last_printed_ip[4] = {0, 0, 0, 0};
     uint32_t last_status_ms = millis_now();
+
+#if NET_USE_DHCP
+    // --- tracking link fisik, buat trigger dhcp_force_renew() saat perlu ---
+    // (lihat komentar NET_LINK_DOWN_RENEW_MS di net_config.h dan
+    // dhcp_force_renew() di dhcp.h buat alasan lengkapnya) - cuma relevan
+    // kalau DHCP aktif; IP statis gak punya "lease" buat dikonfirmasi ulang.
+    uint8_t  link_was_up = enc_link_up();
+    uint32_t link_down_since_ms = 0;
+    uint8_t  link_was_down_long_enough = 0;
+#endif
 
     for (;;) {
         wdt_reset(); // SATU kali per iterasi - lihat prinsip di komentar atas
@@ -257,8 +268,46 @@ int main(void) {
 #endif
         tcp_poll();
 
-        if (!had_ip && net_has_ip()) {
+#if NET_USE_DHCP
+        // Deteksi link fisik down -> up, dan kalau down-nya cukup lama
+        // (bukan cuma kedipan sesaat), minta konfirmasi ulang lease -
+        // lihat NET_LINK_DOWN_RENEW_MS di net_config.h buat alasannya.
+        // Ini SENGAJA gak dilakukan tiap link=down muncul di [status] -
+        // itu cuma print tiap 5 detik, di sini kita cek transisi
+        // sebenarnya tiap iterasi loop (non-blocking, sama seperti pola
+        // millis() lain di file ini).
+        {
+            uint8_t link_now_up = enc_link_up();
+            uint32_t now_link = millis_now();
+            if (link_was_up && !link_now_up) {
+                link_down_since_ms = now_link;
+                link_was_down_long_enough = 0;
+            } else if (!link_was_up && !link_now_up) {
+                if (!link_was_down_long_enough &&
+                    (now_link - link_down_since_ms) >= NET_LINK_DOWN_RENEW_MS) {
+                    link_was_down_long_enough = 1;
+                }
+            } else if (!link_was_up && link_now_up) {
+                if (link_was_down_long_enough) {
+                    uart_print("[NET] link pulih setelah down lama, cek ulang lease DHCP\r\n");
+                    dhcp_force_renew();
+                }
+                link_was_down_long_enough = 0;
+            }
+            link_was_up = link_now_up;
+        }
+#endif
+
+        // Cetak baris "NET:" bukan cuma sekali di awal, tapi tiap kali
+        // net_my_ip BERUBAH (dibandingkan yang terakhir dicetak) - normalnya
+        // cuma sekali (dapat IP pertama kali), tapi kalau dhcp_force_renew()
+        // di atas ternyata membuat server kasih IP BARU (bukan IP lama yang
+        // dikonfirmasi lagi), ESP32 (atau device lain yang baca serial ini)
+        // perlu tahu IP-nya sudah ganti - kalau cuma dicetak sekali di awal,
+        // perubahan ini gak akan pernah kelihatan.
+        if (net_has_ip() && (!had_ip || memcmp(net_my_ip, last_printed_ip, 4) != 0)) {
             had_ip = 1;
+            memcpy(last_printed_ip, net_my_ip, 4);
             // Format 1-baris sama seperti "UDP:"/"TCP:" - prefix "NET:",
             // isinya key=value dipisah ';'. ESP32 tinggal startsWith("NET:")
             // lalu pecah per ';' dan per '=' - gak perlu parsing 4 baris

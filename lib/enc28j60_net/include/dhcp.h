@@ -27,4 +27,19 @@ void dhcp_poll(void);
 
 dhcp_state_t dhcp_get_state(void);
 
+// Minta konfirmasi ulang lease SEKARANG (dipanggil main.c saat link fisik
+// pulih setelah down cukup lama) - TANPA buang net_my_ip yang sekarang,
+// beda dari dhcp_start() yang mulai dari nol (DISCOVER, IP jadi 0.0.0.0
+// dulu). Cukup kirim DHCPREQUEST (broadcast) ke lease yang sudah ada -
+// kalau server masih setuju, kita dapat ACK dan lanjut pakai IP yang
+// sama; kalau server bilang NAK (server berubah/IP sudah dikasih ke
+// device lain), s_state balik ke INIT dan dhcp_poll() otomatis DISCOVER
+// ulang dari nol lewat jalur normal.
+//
+// Sengaja HANYA bertindak kalau state saat ini BOUND - kalau lagi
+// SELECTING/REQUESTING/RENEWING/INIT (proses lain sudah berjalan),
+// panggilan ini diabaikan supaya gak nabrak transaksi (xid) yang sedang
+// berlangsung.
+void dhcp_force_renew(void);
+
 #endif // DHCP_H
