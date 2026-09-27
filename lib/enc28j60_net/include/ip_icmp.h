@@ -22,6 +22,16 @@ void ip_icmp_init(void);
 void net_fill_checksum(uint16_t dest_offset, uint16_t start, uint16_t len,
                        uint16_t pseudo_sum);
 
+// Kebalikan dari net_fill_checksum: VERIFIKASI checksum paket yang BARU
+// DITERIMA (bukan menghitung buat dikirim). Argumen sama persis (start,
+// len, pseudo_sum yang sesuai protokolnya) TAPI beda 1 hal penting: byte
+// checksum si pengirim TIDAK di-nol-kan dulu - ikut terhitung apa
+// adanya. Sifat checksum Internet (ones'-complement): kalau datanya
+// gak berubah selama pengiriman, jumlah semua word 16-bit (termasuk
+// checksum itu sendiri) akan selalu 0xFFFF. Return 1 kalau valid, 0
+// kalau korup (paket harus dibuang, JANGAN diproses).
+uint8_t net_verify_checksum(uint16_t start, uint16_t len, uint16_t pseudo_sum);
+
 // Tulis header IP (versi/IHL, TTL, protocol, src=net_my_ip, dst=dst_ip,
 // total length) ke net_buf, checksum IP masih di-nol-kan (belum final).
 // Panggil ini SEBELUM caller menghitung checksum UDP/TCP-nya sendiri,

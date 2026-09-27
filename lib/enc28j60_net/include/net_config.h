@@ -33,6 +33,12 @@
 // 2KB RAM total di ATmega328 — buffer ini yang paling banyak makan RAM.
 // EtherCard biasa pakai 500-800 byte. Mulai dari 400, naikkan kalau perlu
 // setelah lihat sisa RAM pas semua layer selesai.
+//
+// PENTING: nilai ini juga otomatis jadi batas MSS (Maximum Segment Size)
+// yang diiklankan TCP kita ke peer (lihat TCP_MSS_ADVERTISE di tcp.c) -
+// peer yang taat RFC gak akan kirim segment TCP lebih besar dari sisa
+// buffer ini. Kalau kamu NAIKKAN NET_BUF_SIZE, MSS yang diiklankan ikut
+// naik otomatis (gak perlu ubah tempat lain).
 #define NET_BUF_SIZE    400
 
 // ---------------------------------------------------------------------

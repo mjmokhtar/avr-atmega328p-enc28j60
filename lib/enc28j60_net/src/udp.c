@@ -89,6 +89,27 @@ void udp_input(uint16_t len) {
                        net_buf[UDP_LEN_L_P];
     if (udp_len < UDP_HEADER_LEN)
         return;
+
+    // udp_len itu field DI DALAM paket UDP sendiri, independen dari
+    // ip_total_len yang sudah dicek ip_input() - gak otomatis konsisten
+    // (bisa beda kalau paketnya korup/sengaja dipalsukan). Pastikan
+    // dulu byte yang diklaim udp_len itu BENERAN ada di dalam frame yang
+    // sudah kita terima (len), sebelum dipakai buat batas baca checksum
+    // ATAU diteruskan ke listener sebagai data_len.
+    if ((uint32_t) ETH_HEADER_LEN + IP_HEADER_LEN + udp_len > len)
+        return;
+
+    // Checksum UDP itu OPSIONAL (RFC 768): pengirim yang sengaja kirim
+    // 0x0000 artinya "gak dihitung", BUKAN "checksum-nya kosong makanya
+    // invalid" - kita wajib terima itu apa adanya kalau memang begitu.
+    uint8_t checksum_present = !(net_buf[UDP_CHECKSUM_H_P] == 0 &&
+                                 net_buf[UDP_CHECKSUM_L_P] == 0);
+    if (checksum_present &&
+        !net_verify_checksum(IP_SRC_P, (uint16_t) (8 + udp_len),
+                             (uint16_t) (IP_PROTO_UDP + udp_len))) {
+        return; // checksum salah - buang diam-diam (UDP gak ada balasan error)
+    }
+
     uint16_t data_len = udp_len - UDP_HEADER_LEN;
 
     for (uint8_t i = 0; i < NET_MAX_UDP_LISTENERS; i++) {

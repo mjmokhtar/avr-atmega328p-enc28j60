@@ -200,6 +200,48 @@ Kedipan link yang lebih pendek dari ambang itu (kasus power-supply di
 atas) sengaja TIDAK memicu apa pun — biar gak spam DHCPREQUEST ke server
 tiap kali link kedip sesaat.
 
+## Hardening protokol (verifikasi checksum RX + MSS)
+
+Ditemukan lewat review kode (bukan dari gejala di hardware) — v1 stack ini
+tadinya cuma **menghitung** checksum pas kirim, tapi gak pernah
+**memverifikasi** checksum paket yang **masuk**. Sudah diperbaiki:
+
+1. **Verifikasi checksum RX** — IP header, ICMP, UDP (kecuali pengirim
+   sengaja kirim `0x0000`, artinya checksum memang gak dipakai, sesuai
+   RFC 768), dan TCP sekarang divalidasi begitu paket masuk. Paket yang
+   checksum-nya gak cocok (misal rusak kena noise di kabel) langsung
+   dibuang diam-diam, gak pernah diproses/dibalas.
+2. **Guard panjang paket vs klaim header** — `ip_input()` sekarang
+   membandingkan byte yang BENERAN diterima terhadap panjang yang
+   diklaim header IP. Frame yang kepotong (lebih besar dari
+   `NET_BUF_SIZE`, lihat di atas) sekarang dibuang, bukan diproses
+   sebagian (yang sebelumnya berisiko baca sisa data paket lama yang
+   masih nempel di buffer).
+3. **TCP sekarang mengiklankan MSS** (Maximum Segment Size) di opsi SYN/
+   SYN-ACK, otomatis mengikuti `NET_BUF_SIZE`. Ini penutup #2 dari sisi
+   pengirim: peer yang taat RFC gak akan pernah kirim segment lebih besar
+   dari yang sanggup kita tampung, jadi kasus "kepotong" di atas idealnya
+   gak akan pernah kejadian sama sekali dengan client normal — guard di
+   poin 2 tetap ada sebagai jaring pengaman kalau ada client yang
+   mengabaikan MSS.
+
+Poin lain yang sempat dipertimbangkan tapi TIDAK diubah, dengan alasannya:
+
+- **Cache ARP 1 slot tujuan** — kalau beberapa host beda IP "bicara" ke
+  device hampir bersamaan, cache-nya saling timpa (delay kecil re-ARP,
+  bukan kehilangan data — `eth_arp_learn()` tetap mengisi ulang dari
+  frame yang diterima). Ini keputusan desain RAM yang sudah disengaja,
+  bukan bug — dibiarkan seperti semula.
+- **Flag broadcast DHCP saat renewal** — dicek ulang, ternyata tidak
+  berdampak (device sudah punya IP yang valid, jadi mau balasan server
+  broadcast atau unicast sama-sama bisa kita terima). Tidak diubah.
+- **TCP retransmission data** — BELUM diimplementasikan. Ini bukan fix
+  kecil: butuh buffer salinan data per sesi TCP buat jaga-jaga retry
+  (kira-kira +`NET_MAX_TCP_SESSIONS` × MSS byte RAM tambahan, bisa
+  400-700+ byte tergantung skema), yang di ATmega328 2KB RAM ini adalah
+  keputusan trade-off yang perlu didiskusikan dulu, bukan ditambahkan
+  diam-diam.
+
 ## Yang masih perlu diverifikasi (belum dilakukan)
 
 - Uji jangka panjang lease DHCP renewal (normal, bukan dari link-recovery)

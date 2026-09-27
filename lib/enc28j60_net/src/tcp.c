@@ -15,6 +15,18 @@
 #define TCP_HANDSHAKE_RETRY_MS 2000UL
 #define TCP_HANDSHAKE_GIVEUP_MS 15000UL
 
+// MSS (Maximum Segment Size) yang kita IKLANKAN di opsi SYN/SYN-ACK -
+// sama persis dengan batas yang sudah dipakai tcp_send() buat data KITA
+// SENDIRI (NET_BUF_SIZE - TCP_DATA_P). Tanpa ini, peer yang taat RFC
+// pakai MSS default mereka sendiri (536 atau 1460 byte) - jauh lebih
+// besar dari net_buf kita (400 byte, lihat net_config.h) - dan segment
+// sebesar itu bakal DIBUANG oleh guard panjang di ip_input() (paket
+// dianggap "kepotong" karena kita cuma sanggup terima sebagian). Dengan
+// ngasih tahu batas kita di awal handshake, peer yang taat RFC gak akan
+// pernah kirim segment lebih besar dari ini - closing gap ini di sisi
+// pengirim, bukan cuma nangkep akibatnya di sisi penerima.
+#define TCP_MSS_ADVERTISE     ((uint16_t) (NET_BUF_SIZE - TCP_DATA_P))
+
 #define ST_CLOSED         0
 #define ST_SYN_SENT       1
 #define ST_SYN_RECEIVED   2
@@ -76,18 +88,33 @@ static uint8_t tcp_build_and_send(tcp_session_t *s, uint8_t flags,
     net_buf[TCP_DST_PORT_L_P] = (uint8_t) s->remote_port;
     write_be32(TCP_SEQ_H_P, s->snd_nxt);
     write_be32(TCP_ACK_H_P, s->rcv_nxt);
-    net_buf[TCP_HEADER_LEN_P] = 0x50; // 5 word (20 byte), tanpa opsi
+
+    // Header polos 20 byte (tanpa opsi) secara default - SYN/SYN-ACK
+    // dapat tambahan opsi MSS 4 byte (lihat TCP_MSS_ADVERTISE di atas).
+    // SYN/SYN-ACK di kode ini SELALU data_len==0 (lihat pemanggilnya di
+    // bawah), jadi data_offset di bawah cuma relevan buat jaga-jaga.
+    uint16_t hdr_len_bytes = TCP_HEADER_LEN_PLAIN;
+    uint16_t data_offset = TCP_DATA_P;
+    if (flags & TCP_FLAG_SYN) {
+        net_buf[TCP_OPTIONS_P + 0] = 0x02; // kind = Maximum Segment Size
+        net_buf[TCP_OPTIONS_P + 1] = 0x04; // length opsi ini = 4 byte
+        net_buf[TCP_OPTIONS_P + 2] = (uint8_t) (TCP_MSS_ADVERTISE >> 8);
+        net_buf[TCP_OPTIONS_P + 3] = (uint8_t) TCP_MSS_ADVERTISE;
+        hdr_len_bytes = TCP_HEADER_LEN_PLAIN + 4;
+        data_offset = TCP_OPTIONS_P + 4;
+    }
+    net_buf[TCP_HEADER_LEN_P] = (uint8_t) ((hdr_len_bytes / 4) << 4);
     net_buf[TCP_FLAGS_P] = flags;
     net_buf[TCP_WIN_SIZE_P]     = (uint8_t) (TCP_WINDOW >> 8);
     net_buf[TCP_WIN_SIZE_P + 1] = (uint8_t) TCP_WINDOW;
     net_buf[TCP_URGENT_P]     = 0;
     net_buf[TCP_URGENT_P + 1] = 0;
     if (data_len > 0)
-        memcpy(net_buf + TCP_DATA_P, data, data_len);
+        memcpy(net_buf + data_offset, data, data_len);
     net_buf[TCP_CHECKSUM_H_P]     = 0;
     net_buf[TCP_CHECKSUM_H_P + 1] = 0;
 
-    uint16_t seg_len = (uint16_t) (TCP_HEADER_LEN_PLAIN + data_len);
+    uint16_t seg_len = (uint16_t) (hdr_len_bytes + data_len);
     ip_prepare_send(s->remote_ip, IP_PROTO_TCP, (uint16_t) (IP_HEADER_LEN + seg_len));
     net_fill_checksum(TCP_CHECKSUM_H_P, IP_SRC_P, (uint16_t) (8 + seg_len),
                       (uint16_t) (IP_PROTO_TCP + seg_len));
@@ -276,9 +303,26 @@ void tcp_input(uint16_t len) {
     uint8_t  flags = net_buf[TCP_FLAGS_P];
     uint8_t  hdr_len = (uint8_t) ((net_buf[TCP_HEADER_LEN_P] >> 4) * 4);
 
+    // Data-offset minimum yang valid adalah 5 word (20 byte, header
+    // polos) - kalau kurang dari itu (field korup/paket dipalsukan),
+    // buang sebelum dipakai jadi offset baca apa pun di bawah.
+    if (hdr_len < TCP_HEADER_LEN_PLAIN)
+        return;
+
     uint16_t ip_total_len = ((uint16_t) net_buf[IP_TOTLEN_H_P] << 8) | net_buf[IP_TOTLEN_L_P];
     if (ip_total_len < IP_HEADER_LEN + hdr_len)
         return;
+
+    // Cakupan checksum TCP = seluruh segmen (header + opsi + data), lihat
+    // tcp_build_and_send(). Verifikasi ini SEBELUM data_len/data dipakai
+    // di bawah - segmen yang korup di jalan dibuang di sini, gak pernah
+    // sampai ke callback aplikasi (dan gak pernah di-ACK, jadi peer yang
+    // taat RFC akan retransmit sendiri).
+    uint16_t seg_len = (uint16_t) (ip_total_len - IP_HEADER_LEN);
+    if (!net_verify_checksum(IP_SRC_P, (uint16_t) (8 + seg_len),
+                             (uint16_t) (IP_PROTO_TCP + seg_len)))
+        return;
+
     uint16_t data_len = ip_total_len - IP_HEADER_LEN - hdr_len;
     const uint8_t *data = net_buf + ETH_HEADER_LEN + IP_HEADER_LEN + hdr_len;
 
