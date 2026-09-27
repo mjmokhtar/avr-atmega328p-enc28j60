@@ -1,0 +1,30 @@
+// dhcp.h — DHCP client, state machine non-blocking (RFC 2131 disederhanakan).
+//
+// Beda penting dari behaviour "dhcpSetup()" ala EtherCard yang blocking:
+// di sini TIDAK ADA while() yang nunggu sampai dapat IP. dhcp_poll() cuma
+// mengecek "apa saatnya kirim/retry/renew sekarang", lalu balik ke
+// caller. main.c yang manggil ini tiap iterasi loop.
+
+#ifndef DHCP_H
+#define DHCP_H
+
+#include <stdint.h>
+
+typedef enum {
+    DHCP_STATE_INIT,
+    DHCP_STATE_SELECTING,
+    DHCP_STATE_REQUESTING,
+    DHCP_STATE_BOUND,
+    DHCP_STATE_RENEWING
+} dhcp_state_t;
+
+// Mulai proses DHCP dari nol: reset ke INIT, daftar listener UDP port 68.
+// Panggil sekali di main.c setelah udp_init().
+void dhcp_start(void);
+
+// Panggil tiap iterasi loop utama (bukan cuma sekali). Non-blocking.
+void dhcp_poll(void);
+
+dhcp_state_t dhcp_get_state(void);
+
+#endif // DHCP_H
