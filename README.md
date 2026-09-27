@@ -80,6 +80,51 @@ perumpamaan sehari-hari, BUKAN definisi teknis textbook:
   hal ini beda, lihat bagian "IP tetap valid saat link fisik kedip" di
   bawah).
 
+## Standar TCP yang dipakai di sini
+
+### Echo Protocol (RFC 862) — kenapa data yang dikirim balik SAMA PERSIS
+
+Port demo TCP/UDP echo (`DEMO_TCP_ECHO_PORT`/`DEMO_UDP_ECHO_PORT`) di
+project ini mengikuti **RFC 862 — Echo Protocol**: apa pun data yang
+dikirim ke server, dikirim balik **byte-demi-byte identik**, tanpa
+diubah, tanpa tambahan apa pun. Ini standar lama (dari awal era
+internet) yang memang cuma dipakai buat **tes konektivitas** — ngecek
+apakah jalur kirim-terima di jaringan bener-bener jalan — bukan buat
+aplikasi beneran. Kalau kamu kirim `woii` dan device balas `woii` juga
+persis sama, itu **bukan bug** — itu tandanya echo server-nya bekerja
+dengan benar. Mau device balas sesuatu yang beda, itu berarti bukan lagi
+echo protocol standar, harus ditulis logic sendiri di `on_tcp_echo()`/
+`on_udp_echo()` (`src/main.c`).
+
+### Flag TCP (bukan cuma ACK)
+
+TCP punya beberapa "flag" 1-bit di header-nya, dipakai buat nandain
+maksud tiap paket. Semua sudah didefinisikan di
+`lib/enc28j60_net/include/net_offsets.h`:
+
+| Flag | Arti sederhana |
+|---|---|
+| `SYN` | "Mau mulai nyambung nih, boleh?" — dikirim di awal koneksi |
+| `ACK` | "Oke, diterima/dimengerti" — nempel di hampir semua paket setelah handshake |
+| `SYN`+`ACK` | Gabungan: "boleh nyambung, dan aku juga siap" (balasan langkah ke-2 handshake) |
+| `PSH` | "Ini data beneran, langsung kasih ke aplikasi, jangan ditahan di buffer" |
+| `FIN` | "Aku sudah selesai ngirim, mau tutup koneksi" (pamit baik-baik) |
+| `RST` | "Ada yang salah/gak valid, koneksi dibatalkan paksa" (bukan pamit, lebih kasar dari FIN) |
+| `URG` | Data prioritas darurat — **tidak dipakai** di project ini (field selalu di-nol-kan, lihat `TCP_URGENT_P` di `tcp.c`) |
+
+Alur di firmware ini (bisa dicocokkan langsung ke log `[TCP] ...` di
+serial monitor kamu):
+
+1. Client kirim **SYN** → device balas **SYN+ACK** → client balas
+   **ACK** → koneksi `ESTABLISHED`, muncul log `[TCP] koneksi baru`.
+2. Tiap kirim data (dari kedua arah) → **PSH+ACK** (lihat `tcp_send()`
+   di `tcp.c`, selalu kirim kombinasi 2 flag ini).
+3. Salah satu pihak kirim **FIN+ACK** → device langsung balas **FIN+ACK**
+   juga (closing sepihak, bukan `CLOSE_WAIT` penuh — lihat batasan v1 di
+   `tcp.h`) → sesi ditutup, muncul log `[TCP] sesi ditutup`.
+4. Kalau ada **RST** masuk → device langsung tutup sesi tanpa balasan
+   apa pun (lihat `tcp_input()`, blok `if (flags & TCP_FLAG_RST)`).
+
 ## Kenapa nulis sendiri, bukan pakai EtherCard/UIPEthernet?
 
 Supaya paham penuh setiap layer (SPI raw → MAC/PHY init → Ethernet frame →

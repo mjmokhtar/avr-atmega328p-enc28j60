@@ -44,7 +44,7 @@ static const uint8_t MY_MAC[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
 // gak perlu cari-cari lagi di dalam main() (dipakai di udp_listen()/
 // tcp_listen() di bawah, dan komentar contoh netcat).
 #define DEMO_UDP_ECHO_PORT  5000
-#define DEMO_TCP_ECHO_PORT  7
+#define DEMO_TCP_ECHO_PORT  8080
 
 #define UART_BAUD  38400UL
 #define UART_UBRR  ((F_CPU / (16UL * UART_BAUD)) - 1)
@@ -125,7 +125,7 @@ static void on_udp_echo(const uint8_t src_ip[4], uint16_t src_port,
 }
 
 // ---------------------------- Handler TCP echo -------------------------
-// DEMO_TCP_ECHO_PORT default 7 (port "echo" klasik). Tes pakai:
+// DEMO_TCP_ECHO_PORT default 8080 (port "echo" klasik). Tes pakai:
 // `nc <ip-device> <DEMO_TCP_ECHO_PORT>`
 static void on_tcp_echo(uint8_t session_id, tcp_event_t event,
                         const uint8_t *data, uint16_t len) {
