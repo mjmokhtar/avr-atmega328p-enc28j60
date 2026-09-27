@@ -14,6 +14,72 @@ Flash: 30.9% (9960 / 32256 bytes)
 ```
 (diukur dengan semua fitur aktif sekaligus: ICMP + UDP + DHCP + NTP + TCP)
 
+## Istilah-istilah ini artinya apa? (versi sesederhana mungkin)
+
+Kalau baru pertama kali baca soal jaringan, banyak singkatan di atas
+(ARP, IP, ICMP, dst) memang bikin bingung. Ini penjelasannya pakai
+perumpamaan sehari-hari, BUKAN definisi teknis textbook:
+
+- **MAC address** — nomor seri unik yang "ditempel pabrik" ke tiap alat
+  jaringan (kayak nomor rangka motor). Gak pernah berubah, gak bisa
+  dipilih sendiri.
+- **IP address** — alamat rumah di jaringan (misal `192.168.8.184`). Beda
+  dari MAC: alamat rumah ini BISA berubah tiap kali pindah jaringan.
+- **ARP** — cara nyari "MAC address siapa yang punya IP ini". Kayak
+  teriak di komplek: *"Yang rumahnya nomor 5, siapa nama aslinya?"* —
+  terus yang punya rumah itu jawab. Device simpan jawabannya sebentar
+  biar gak perlu teriak-teriak lagi tiap mau kirim surat ke rumah yang
+  sama.
+- **Ethernet frame** — amplop paling luar buat kirim data DI DALAM 1
+  jaringan lokal (kabel/switch yang sama). Isinya cuma "dari MAC siapa,
+  ke MAC siapa".
+- **IP / paket IP** — amplop KEDUA di dalam amplop Ethernet tadi, isinya
+  "dari IP siapa, ke IP siapa" — ini yang bikin data bisa diantar lebih
+  jauh, lewat banyak jaringan (sampai ke internet), gak cuma 1 kabel.
+- **ICMP** — pesan "halo, kamu masih hidup?" (`ping`). Dipakai buat cek
+  apakah 1 device di jaringan masih nyala & bisa dihubungi, tanpa ngirim
+  data beneran.
+- **UDP** — kirim surat TANPA tanda terima. Cepat, ringan, tapi kalau
+  suratnya nyasar/hilang di jalan, pengirim gak akan tahu. Cocok buat
+  pesan kecil yang gak fatal kalau sesekali hilang.
+- **TCP** — kirim surat PAKAI tanda terima wajib. Tiap surat harus
+  dibalas "sudah sampai" dulu sebelum lanjut kirim berikutnya — lebih
+  "berat" dari UDP, tapi lebih bisa diandalkan buat sesuatu yang harus
+  utuh (misal perintah, file kecil).
+- **Handshake TCP** (3 langkah SYN → SYN-ACK → ACK) — "salaman" basa-basi
+  sebelum ngobrol serius: *"halo, boleh nyambung?"* → *"boleh, aku juga
+  siap"* → *"oke, mulai deh"*. Baru setelah 3 langkah ini selesai, data
+  beneran boleh dikirim.
+- **Port** — nomor pintu KECIL di dalam 1 alamat IP. 1 rumah (1 IP) bisa
+  punya banyak pintu (port) buat layanan berbeda-beda sekaligus — port
+  `7` buat layanan echo, port `5000` buat UDP echo di project ini, dst.
+- **DHCP** — "resepsionis" otomatis di jaringan yang bagi-bagiin alamat
+  IP ke device baru yang nyambung, jadi gak perlu diseting manual satu-
+  satu. Alamat yang dikasih itu sifatnya PINJAMAN (ada masa berlakunya,
+  disebut *lease* — lihat poin di bawah), bukan punya selamanya.
+- **DHCP lease** — masa berlaku "pinjaman" IP dari DHCP di atas. Sebelum
+  habis masa berlakunya, device wajib minta konfirmasi ulang (*renew*)
+  ke server kalau masih mau pakai IP yang sama.
+- **NTP** — cara minta "jam berapa sekarang?" ke server waktu di
+  internet, biar device yang gak punya baterai jam sendiri (RTC) tetap
+  tahu tanggal/jam yang benar.
+- **Checksum** — angka kecil hasil hitung-hitungan dari isi paket, dikirim
+  bareng paketnya. Penerima hitung ulang isi paket yang diterima — kalau
+  hasilnya beda dari checksum yang dikirim, berarti ada bagian yang
+  rusak di jalan (kayak ngitung ulang total struk belanja: kalau gak
+  cocok sama yang tertulis, berarti ada yang keliru).
+- **MSS (Maximum Segment Size)** — batas "jangan kirim 1 kiriman data TCP
+  lebih besar dari segini", supaya muat ditampung penerima (device kita,
+  RAM-nya kecil, jadi gak sanggup nampung kiriman yang kegedean sekaligus).
+- **Broadcast** — teriak ke SEMUA orang di jaringan sekaligus, bukan
+  bisik-bisik ke 1 alamat tertentu. Dipakai contohnya waktu device belum
+  punya IP sama sekali dan butuh nanya "ada DHCP server gak di sini?"
+- **Link up / link down** — status sambungan FISIK (kabel Ethernet).
+  "up" = kabel tersambung & aktif, "down" = putus/longgar/gak ada sinyal
+  sama sekali — ini soal kabelnya, BUKAN soal dapat IP atau tidak (dua
+  hal ini beda, lihat bagian "IP tetap valid saat link fisik kedip" di
+  bawah).
+
 ## Kenapa nulis sendiri, bukan pakai EtherCard/UIPEthernet?
 
 Supaya paham penuh setiap layer (SPI raw → MAC/PHY init → Ethernet frame →
