@@ -1,0 +1,50 @@
+name: Build firmware
+
+# Compile-check tiap push/PR - biar kalau ada yang ngedit kode dan ada
+# typo/error, ketahuan dari GitHub Actions, bukan pas udah mau di-flash.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch: {} # bisa juga dijalankan manual dari tab Actions
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Cache paket PlatformIO (toolchain avr-gcc, dll) biar build berikutnya
+      # gak download ulang dari nol tiap kali - lumayan pengaruh ke waktu CI.
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build (env uno)
+        run: pio run -e uno
+
+      - name: Show firmware size
+        run: pio run -e uno --target size || true
+
+      # Simpan firmware.hex/.elf sebagai artifact CI (bukan release) - buat
+      # yang mau cek hasil build tiap commit tanpa nunggu bikin release/tag.
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-uno
+          path: |
+            .pio/build/uno/firmware.hex
+            .pio/build/uno/firmware.elf
+          if-no-files-found: error

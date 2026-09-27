@@ -1,0 +1,57 @@
+name: Release firmware
+
+# Trigger: tiap kali kamu push TAG berformat v1.0.0, v1.2.3, dst -
+#   git tag v1.0.0
+#   git push origin v1.0.0
+# Workflow ini compile firmware, lalu attach firmware.hex ke GitHub
+# Release yang otomatis dibuat dari tag itu - jadi orang lain tinggal
+# download .hex-nya dari halaman Releases, gak perlu install PlatformIO
+# atau compile sendiri sama sekali.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {} # opsi jalankan manual dari tab Actions kalau perlu
+
+permissions:
+  contents: write # wajib - buat bisa bikin release & upload asset
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build (env uno)
+        run: pio run -e uno
+
+      # Ganti nama file .hex biar jelas versi + board-nya waktu di-download
+      # dari halaman Releases (bukan cuma "firmware.hex" polos).
+      - name: Rename artifact dengan versi tag
+        run: |
+          mkdir -p dist
+          cp .pio/build/uno/firmware.hex "dist/enc28j60_stack-${{ github.ref_name }}-uno.hex"
+          cp .pio/build/uno/firmware.elf "dist/enc28j60_stack-${{ github.ref_name }}-uno.elf"
+
+      - name: Publish ke GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.hex
+            dist/*.elf
+          generate_release_notes: true
