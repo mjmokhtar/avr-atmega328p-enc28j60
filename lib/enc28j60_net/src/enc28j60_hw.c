@@ -11,6 +11,7 @@
 #include <util/delay.h>
 #include <string.h>
 #include "enc28j60_hw.h"
+#include "spi_bus.h"
 
 uint8_t net_buf[NET_BUF_SIZE];
 
@@ -122,40 +123,28 @@ uint8_t net_buf[NET_BUF_SIZE];
 static uint8_t s_bank;
 
 // -----------------------------------------------------------------
-// SPI dasar (register native AVR, bukan pinMode/digitalWrite Arduino)
+// SPI: bus dipakai BERSAMA lewat lib/spi_bus. Driver ini cuma punya
+// descriptor perangkatnya sendiri (pin CS + mode + clock), tidak pernah
+// menyentuh SPCR/SPSR.
+//
+// Mode 0, fosc/2 (= 8MHz @ F_CPU 16MHz): sama persis dengan versi lama.
+// Jangan diperlambat — ENC28J60 butuh clock SPI cukup cepat.
+//
+// cli()/sei() lama di chip_select/deselect DIHAPUS: tidak ada ISR yang
+// memakai SPI di project ini (satu-satunya ISR = millis), jadi itu tidak
+// melindungi apa-apa, dan sei() tanpa syarat berbahaya + memblokir
+// interrupt selama transfer perangkat lain. Kalau mau membandingkan
+// perilaku lama: build dengan -DSPI_BUS_DISABLE_IRQ=1.
 // -----------------------------------------------------------------
-static void spi_init(void) {
-    // MOSI=PB3, SCK=PB5 output; MISO=PB4 input (fixed silicon ATmega328).
-    DDRB |= (1 << PB3) | (1 << PB5);
-    DDRB &= (uint8_t) ~(1 << PB4);
-
-    // Pin CS ke ENC28J60 (dikonfigurasi lewat net_config.h).
-    ENC_CS_DDR |= (1 << ENC_CS_BIT);
-    ENC_CS_PORT |= (1 << ENC_CS_BIT); // idle = HIGH (deselect)
-
-    // SPI master, mode 0, clock fosc/2 (SPI2X=1, SPR1:0=0) -> 8MHz @ F_CPU 16MHz.
-    SPCR = (1 << SPE) | (1 << MSTR);
-    SPSR |= (1 << SPI2X);
-}
+static const spi_dev_t s_enc_dev =
+    SPI_DEV(ENC_CS_PORT, ENC_CS_DDR, ENC_CS_BIT, SPI_MODE0 | SPI_DIV2, 0);
 
 static inline void chip_select(void) {
-    // errata note (diwarisi dari EtherCard): matikan interrupt selama CS
-    // aktif, supaya transaksi SPI gak pernah "digigit" ISR millis di
-    // tengah jalan lalu bikin timing SetBank/EIR jadi gak konsisten.
-    cli();
-    ENC_CS_PORT &= (uint8_t) ~(1 << ENC_CS_BIT);
+    spi_begin(&s_enc_dev);
 }
 
 static inline void chip_deselect(void) {
-    ENC_CS_PORT |= (1 << ENC_CS_BIT);
-    sei();
-}
-
-static inline uint8_t spi_xfer(uint8_t data) {
-    SPDR = data;
-    while (!(SPSR & (1 << SPIF)))
-        ;
-    return SPDR;
+    spi_end(&s_enc_dev);
 }
 
 static uint8_t read_op(uint8_t op, uint8_t address) {
@@ -179,8 +168,7 @@ static void read_buf(uint16_t len, uint8_t *data) {
     chip_select();
     if (len != 0) {
         spi_xfer(OP_READ_BUF_MEM);
-        while (len--)
-            *data++ = spi_xfer(0x00);
+        spi_read(data, len, 0x00);
     }
     chip_deselect();
 }
@@ -189,8 +177,7 @@ static void write_buf(uint16_t len, const uint8_t *data) {
     chip_select();
     if (len != 0) {
         spi_xfer(OP_WRITE_BUF_MEM);
-        while (len--)
-            spi_xfer(*data++);
+        spi_write(data, len);
     }
     chip_deselect();
 }
@@ -246,8 +233,8 @@ static void phy_write(uint8_t address, uint16_t data) {
 // API publik
 // -----------------------------------------------------------------
 uint8_t enc_init(const uint8_t mac[6]) {
-    spi_init();
-    ENC_CS_PORT |= (1 << ENC_CS_BIT);
+    spi_bus_init();               // idempotent; aman kalau main sudah memanggil
+    spi_dev_init(&s_enc_dev);     // CS ENC output HIGH
 
     write_op(OP_SOFT_RESET, 0, OP_SOFT_RESET);
     _delay_ms(2); // errata B7/2: chip butuh waktu settle setelah reset

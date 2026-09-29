@@ -23,7 +23,22 @@ typedef enum {
 void dhcp_start(void);
 
 // Panggil tiap iterasi loop utama (bukan cuma sekali). Non-blocking.
+//
+// DISCOVER pertama SENGAJA ditahan sampai link fisik up (enc_link_up()):
+// frame yang dikirim saat PHY belum selesai negosiasi link hilang percuma,
+// dan percobaan berikutnya baru 10 detik kemudian.
+//
+// Kalau NET_DHCP_FALLBACK_STATIC == 1 (net_config.h) dan lease belum ada
+// NET_DHCP_FALLBACK_MS setelah dhcp_start() - entah router diam atau link
+// tidak pernah naik - IP statis dipasang otomatis; DHCP lalu dicoba lagi
+// tiap NET_DHCP_RETRY_AFTER_FALLBACK_MS (0 = berhenti). DISCOVER hanya
+// dikirim saat link up, jadi kalau kabel baru dicolok belakangan, lease
+// DHCP dicari begitu link naik dan menggantikan IP statis.
 void dhcp_poll(void);
+
+// 1 kalau IP yang sedang dipakai adalah IP statis cadangan (DHCP gagal),
+// 0 kalau tidak (belum fallback, atau sudah dapat lease DHCP).
+uint8_t dhcp_using_fallback(void);
 
 dhcp_state_t dhcp_get_state(void);
 

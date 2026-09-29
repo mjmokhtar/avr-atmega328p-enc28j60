@@ -6,9 +6,9 @@
 // wajar 1 iterasi. TIDAK ada wdt_reset() nyebar di banyak tempat, karena
 // loop ini didesain non-blocking dari awal (gak ada delay()/while() lama).
 //
-// UART debug ditulis manual di sini (bukan bagian lib/enc28j60_net) -
-// cuma buat MJ lihat apa yang terjadi lewat Serial Monitor, di luar
-// scope stack jaringan itu sendiri.
+// UART debug ada di lib/uart (uart.h) - cuma buat MJ lihat apa yang
+// terjadi lewat Serial Monitor, di luar scope stack jaringan itu sendiri.
+// SPI bersama ada di lib/spi_bus (dipakai driver ENC28J60).
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -17,6 +17,7 @@
 #include <stdio.h>
 
 #include "net_config.h"
+#include "uart.h"
 #include "millis.h"
 #include "enc28j60_hw.h"
 #include "eth_arp.h"
@@ -45,57 +46,6 @@ static const uint8_t MY_MAC[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
 // tcp_listen() di bawah, dan komentar contoh netcat).
 #define DEMO_UDP_ECHO_PORT  5000
 #define DEMO_TCP_ECHO_PORT  8080
-
-#define UART_BAUD  38400UL
-#define UART_UBRR  ((F_CPU / (16UL * UART_BAUD)) - 1)
-
-// Batas panjang isi paket yang di-print ke serial - biar 1 paket gede gak
-// nge-spam serial berlebihan (UART 38400 baud lumayan lambat).
-#define UART_DATA_PRINT_MAX  48
-
-// -------------------------- UART debug (TX only) ----------------------
-static void uart_init(void) {
-    UBRR0H = (uint8_t) (UART_UBRR >> 8);
-    UBRR0L = (uint8_t) UART_UBRR;
-    UCSR0B = (1 << TXEN0);               // aktifkan transmitter saja
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // 8N1
-}
-
-static void uart_putc(char c) {
-    while (!(UCSR0A & (1 << UDRE0)))
-        ;
-    UDR0 = (uint8_t) c;
-}
-
-static void uart_print(const char *s) {
-    while (*s)
-        uart_putc(*s++);
-}
-
-static void uart_print_ip(const uint8_t ip[4]) {
-    char buf[17];
-    snprintf(buf, sizeof buf, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
-    uart_print(buf);
-}
-
-static void uart_print_ipport(const uint8_t ip[4], uint16_t port) {
-    uart_print_ip(ip);
-    char buf[8];
-    snprintf(buf, sizeof buf, ":%u", port);
-    uart_print(buf);
-}
-
-// Print isi data apa adanya (byte mentah, bukan lewat snprintf) - dibatasi
-// panjangnya biar 1 paket gede gak nge-spam serial berlebihan. data
-// menunjuk ke net_buf, JANGAN dipanggil setelah paket berikutnya diterima
-// (sama seperti aturan pointer di udp.h/tcp.h).
-static void uart_print_data(const uint8_t *data, uint16_t len) {
-    uint16_t n = (len > UART_DATA_PRINT_MAX) ? UART_DATA_PRINT_MAX : len;
-    for (uint16_t i = 0; i < n; i++)
-        uart_putc((char) data[i]);
-    if (len > n)
-        uart_print("...(dipotong)");
-}
 
 // ---------------------------- Handler UDP echo -------------------------
 // Kirim balik apa pun yang diterima, ke pengirim yang sama - buat tes
@@ -165,9 +115,24 @@ static volatile uint32_t g_last_ntp_time = 0;
 
 static void on_ntp_time(uint32_t unix_time) {
     g_last_ntp_time = unix_time;
-    char buf[32];
+    char buf[40];
     snprintf(buf, sizeof buf, "[NTP] waktu diterima: %lu\r\n", (unsigned long) unix_time);
     uart_print(buf);
+}
+#endif
+
+#if NET_USE_DHCP
+// Nama pendek state DHCP buat baris [status] - biar kelihatan apakah
+// renewal/DISCOVER lagi berjalan, bukan cuma "pernah dapat IP".
+static const char *dhcp_state_name(dhcp_state_t st) {
+    switch (st) {
+    case DHCP_STATE_INIT:       return "init";
+    case DHCP_STATE_SELECTING:  return "select";
+    case DHCP_STATE_REQUESTING: return "request";
+    case DHCP_STATE_BOUND:      return "bound";
+    case DHCP_STATE_RENEWING:   return "renew";
+    }
+    return "?";
 }
 #endif
 
@@ -298,6 +263,20 @@ int main(void) {
         }
 #endif
 
+#if NET_USE_DHCP
+        // Beri tahu lewat serial saat pindah ke IP statis cadangan (DHCP
+        // gagal) atau kembali ke lease DHCP. Baris "NET:" di bawah tetap
+        // dicetak otomatis karena net_my_ip berubah.
+        {
+            static uint8_t fb_reported = 0;
+            uint8_t fb = dhcp_using_fallback();
+            if (fb != fb_reported) {
+                fb_reported = fb;
+                uart_print(fb ? "[NET] fallback static\r\n" : "[NET] DHCP ok\r\n");
+            }
+        }
+#endif
+
         // Cetak baris "NET:" bukan cuma sekali di awal, tapi tiap kali
         // net_my_ip BERUBAH (dibandingkan yang terakhir dicetak) - normalnya
         // cuma sekali (dapat IP pertama kali), tapi kalau dhcp_force_renew()
@@ -330,7 +309,19 @@ int main(void) {
             last_status_ms = now;
             uart_print("[status] link=");
             uart_print(enc_link_up() ? "up" : "down");
-            uart_print(had_ip ? ", ip=OK\r\n" : ", ip=belum dapat\r\n");
+            // ip= mencerminkan keadaan SEKARANG (net_has_ip()), bukan flag
+            // "pernah dapat IP" (had_ip) seperti sebelumnya - itu tidak
+            // pernah turun lagi, jadi menyembunyikan IP yang hilang.
+            uart_print(net_has_ip() ? ", ip=OK" : ", ip=belum dapat");
+#if NET_USE_DHCP
+            // dhcp = lewat lease DHCP, static-fb = IP statis cadangan (DHCP
+            // gagal); setelah "/" adalah state DHCP saat ini.
+            uart_print(dhcp_using_fallback() ? ", mode=static-fb/" : ", mode=dhcp/");
+            uart_print(dhcp_state_name(dhcp_get_state()));
+#else
+            uart_print(", mode=static");
+#endif
+            uart_print("\r\n");
         }
     }
 }

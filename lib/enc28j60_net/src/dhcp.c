@@ -11,6 +11,7 @@
 //   keamanan kriptografis (DHCP memang gak didesain aman secara itu).
 
 #include <string.h>
+#include <avr/pgmspace.h>
 #include "dhcp.h"
 #include "udp.h"
 #include "enc28j60_hw.h"
@@ -53,7 +54,43 @@ static uint32_t s_lease_start;
 static uint32_t s_lease_time_ms = 0xFFFFFFFFUL; // default: dianggap "selamanya" sampai server bilang lain
 static uint8_t  s_dhcp_server_ip[4];
 
+// --- fallback ke IP statis (lihat net_config.h) ---
+static uint8_t  s_fallback_active = 0;   // 1 = sedang memakai IP statis cadangan
+static uint8_t  s_attempt_started = 0;   // 1 = timer fallback sedang berjalan untuk percobaan ini
+static uint32_t s_attempt_start_ms;      // waktu percobaan ini dimulai (boot / awal pencarian ulang)
+static uint32_t s_fallback_retry_ms;     // patokan waktu retry DHCP di belakang layar
+
+// --- deteksi link naik (kabel baru dicolok) & kirim ulang DISCOVER ---
+static uint8_t  s_link_prev  = 1;   // anggap up saat boot: boot dgn kabel terpasang tidak diberi jeda
+static uint8_t  s_link_event = 0;   // 1 = link baru naik, DHCP dicari segera setelah jeda settle
+static uint32_t s_link_up_ms;       // kapan link naik
+static uint32_t s_last_tx_ms;       // kapan DISCOVER terakhir dikirim
+
+#ifndef NET_DHCP_LINK_SETTLE_MS
+#define NET_DHCP_LINK_SETTLE_MS 1000UL
+#endif
+#define DHCP_DISCOVER_RESEND_MS 3000UL
+
 static const uint8_t BCAST_IP[4] = {255, 255, 255, 255};
+
+#if NET_DHCP_FALLBACK_STATIC
+// Pasang NET_STATIC_* (disimpan di flash, bukan SRAM) sebagai IP aktif.
+// DNS tidak diketahui, jadi dikosongkan.
+static void dhcp_apply_static(uint32_t now) {
+    static const uint8_t ip[4] PROGMEM = NET_STATIC_IP;
+    static const uint8_t nm[4] PROGMEM = NET_STATIC_NETMASK;
+    static const uint8_t gw[4] PROGMEM = NET_STATIC_GATEWAY;
+    memcpy_P(net_my_ip, ip, 4);
+    memcpy_P(net_netmask, nm, 4);
+    memcpy_P(net_gw_ip, gw, 4);
+    memset(net_dns_ip, 0, 4);
+    net_state_update_broadcast();
+
+    s_fallback_active = 1;
+    s_fallback_retry_ms = now;
+    s_state = DHCP_STATE_INIT;   // dhcp_poll() menunggu jadwal retry di INIT
+}
+#endif
 
 static void dhcp_send(uint8_t msg_type, const uint8_t *requested_ip) {
     uint8_t *base = net_buf + UDP_DATA_P;
@@ -102,7 +139,21 @@ static void dhcp_send(uint8_t msg_type, const uint8_t *requested_ip) {
     *p++ = DHCP_OPT_END;
 
     uint16_t total_len = (uint16_t) (p - base);
+
+    // RFC 2131: selama belum punya lease, source IP harus 0.0.0.0. Saat
+    // IP statis cadangan aktif, net_my_ip berisi IP statis - kirim DISCOVER/
+    // REQUEST awal dengan source itu bisa dibuang router yang ketat. Jadi
+    // sementara dikosongkan hanya untuk pengiriman ini. Renewal (BOUND/
+    // RENEWING) tetap memakai IP asli.
+    uint8_t saved_ip[4];
+    uint8_t zero_src = (s_state != DHCP_STATE_BOUND && s_state != DHCP_STATE_RENEWING);
+    if (zero_src) {
+        memcpy(saved_ip, net_my_ip, 4);
+        memset(net_my_ip, 0, 4);
+    }
     udp_send_inplace(DHCP_CLIENT_PORT, BCAST_IP, DHCP_SERVER_PORT, total_len);
+    if (zero_src)
+        memcpy(net_my_ip, saved_ip, 4);
 }
 
 // Cari 1 opsi tertentu di dalam blok opsi DHCP. Return pointer ke data
@@ -191,6 +242,8 @@ static void dhcp_on_packet(const uint8_t src_ip[4], uint16_t src_port,
             net_state_update_broadcast();
             s_lease_start = millis_now();
             s_state = DHCP_STATE_BOUND;
+            s_fallback_active = 0;   // lease DHCP menggantikan IP statis (kalau ada)
+            s_attempt_started = 0;   // percobaan berikutnya (mis. renewal gagal) mulai dari nol
         } else if (msg_type == DHCP_MSG_NAK) {
             s_state = DHCP_STATE_INIT; // server nolak, mulai ulang dari nol
         }
@@ -199,6 +252,15 @@ static void dhcp_on_packet(const uint8_t src_ip[4], uint16_t src_port,
 
 void dhcp_start(void) {
     s_state = DHCP_STATE_INIT;
+    s_fallback_active = 0;
+    // Timer fallback mulai dihitung dari SINI (boot), tidak menunggu link
+    // up atau DISCOVER pertama. Kalau kabel tidak terpasang / link tidak
+    // pernah naik, device tetap pindah ke IP statis setelah
+    // NET_DHCP_FALLBACK_MS - bukan menggantung tanpa IP selamanya.
+    s_attempt_started = 1;
+    s_attempt_start_ms = millis_now();
+    s_link_prev = 1;
+    s_link_event = 0;
     memset(net_my_ip, 0, 4);
     udp_listen(DHCP_CLIENT_PORT, dhcp_on_packet);
 }
@@ -206,19 +268,84 @@ void dhcp_start(void) {
 void dhcp_poll(void) {
     uint32_t now = millis_now();
 
+    // Pantau transisi link. Link naik = kabel baru dicolok / router hidup:
+    // DHCP harus dicari SEKARANG (setelah jeda settle), walau sedang di IP
+    // statis cadangan dan jadwal retry-nya belum tiba.
+    uint8_t link = enc_link_up();
+    if (link && !s_link_prev) {
+        s_link_up_ms = now;
+        s_link_event = 1;
+    } else if (!link) {
+        s_link_event = 0;
+    }
+    s_link_prev = link;
+
+#if NET_DHCP_FALLBACK_STATIC
+    // Sudah cukup lama mencoba tanpa hasil (link down ATAU router diam) ->
+    // pindah ke IP statis. Hanya untuk pencarian IP; renewal (RENEWING)
+    // punya jalurnya sendiri.
+    if (!s_fallback_active && s_attempt_started &&
+        s_state != DHCP_STATE_BOUND && s_state != DHCP_STATE_RENEWING &&
+        (now - s_attempt_start_ms) >= NET_DHCP_FALLBACK_MS) {
+        dhcp_apply_static(now);
+    }
+#endif
+
     switch (s_state) {
     case DHCP_STATE_INIT:
+#if NET_DHCP_FALLBACK_STATIC
+        // Sudah pakai IP statis: DHCP cuma dicoba lagi tiap interval retry
+        // (0 = tidak pernah).
+        // Kecuali link baru saja naik: itu melewati gerbang retry.
+        if (s_fallback_active && !s_link_event &&
+            (NET_DHCP_RETRY_AFTER_FALLBACK_MS == 0UL ||
+             (now - s_fallback_retry_ms) < NET_DHCP_RETRY_AFTER_FALLBACK_MS))
+            break;
+#endif
+        // Percobaan baru (mis. setelah renewal gagal): mulai hitung timer
+        // fallback SEKARANG, sebelum cek link, supaya link yang tidak
+        // pernah naik pun tetap berujung ke IP statis.
+        if (!s_attempt_started) {
+            s_attempt_started = 1;
+            s_attempt_start_ms = now;
+        }
+
+        // Tahan DISCOVER sampai link fisik up: frame yang dikirim saat PHY
+        // belum selesai negosiasi hilang percuma (dan retry baru 10 dtk
+        // lagi). Ini penyebab "harus restart beberapa kali" sebelumnya.
+        if (!link)
+            break;
+
+        // Link baru naik: beri PHY/switch/router waktu settle sebelum
+        // DISCOVER pertama (frame terlalu awal hilang percuma).
+        if (s_link_event && (now - s_link_up_ms) < NET_DHCP_LINK_SETTLE_MS)
+            break;
+        s_link_event = 0;
+
         s_xid = now; // "acak" secukupnya - lihat komentar di atas file
-        memset(net_my_ip, 0, 4);
+        if (!s_fallback_active)
+            memset(net_my_ip, 0, 4);   // IP statis cadangan JANGAN dihapus
         dhcp_send(DHCP_MSG_DISCOVER, NULL);
         s_state = DHCP_STATE_SELECTING;
         s_state_timer = now;
+        s_last_tx_ms = now;
         break;
 
     case DHCP_STATE_SELECTING:
     case DHCP_STATE_REQUESTING:
-        if ((now - s_state_timer) > DHCP_TIMEOUT_MS)
+        // Kirim ulang DISCOVER (xid SAMA) tiap 3 dtk selama jendela 10 dtk:
+        // satu frame yang hilang tidak lagi berarti menunggu 10 dtk penuh.
+        if (s_state == DHCP_STATE_SELECTING &&
+            (now - s_last_tx_ms) >= DHCP_DISCOVER_RESEND_MS &&
+            (now - s_state_timer) <= DHCP_TIMEOUT_MS) {
+            dhcp_send(DHCP_MSG_DISCOVER, NULL);
+            s_last_tx_ms = now;
+        }
+        if ((now - s_state_timer) > DHCP_TIMEOUT_MS) {
             s_state = DHCP_STATE_INIT; // timeout - ulang dari DISCOVER
+            if (s_fallback_active)
+                s_fallback_retry_ms = now;   // retry berikutnya dihitung dari sini
+        }
         break;
 
     case DHCP_STATE_BOUND:
@@ -239,6 +366,10 @@ void dhcp_poll(void) {
 
 dhcp_state_t dhcp_get_state(void) {
     return s_state;
+}
+
+uint8_t dhcp_using_fallback(void) {
+    return s_fallback_active;
 }
 
 void dhcp_force_renew(void) {

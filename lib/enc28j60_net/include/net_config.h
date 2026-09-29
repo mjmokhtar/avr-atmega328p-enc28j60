@@ -60,12 +60,45 @@
 //     server DHCP di jaringan.
 #define NET_USE_DHCP    1
 
-#if !NET_USE_DHCP
-// Cuma dipakai kalau NET_USE_DHCP == 0 - ganti sesuai jaringan kamu.
-#define NET_STATIC_IP       {192, 168, 1, 200}
+// IP statis. Dipakai kalau NET_USE_DHCP == 0, DAN sebagai cadangan kalau
+// DHCP gagal (lihat NET_DHCP_FALLBACK_STATIC di bawah).
+//
+// WAJIB disesuaikan dengan jaringan kamu: subnet-nya harus sama dengan
+// router, dan alamatnya harus DI LUAR rentang yang dibagikan DHCP router
+// (kalau tidak, bisa bentrok dengan perangkat lain). Nilai di bawah
+// mengikuti log hardware di README (jaringan 192.168.8.x).
+#define NET_STATIC_IP       {192, 168, 8, 200}
 #define NET_STATIC_NETMASK  {255, 255, 255, 0}
-#define NET_STATIC_GATEWAY  {192, 168, 1, 1}
-#endif
+#define NET_STATIC_GATEWAY  {192, 168, 8, 1}
+
+// ---------------------------------------------------------------------
+// Fallback: kalau DHCP tidak dapat IP, pakai IP statis di atas
+// ---------------------------------------------------------------------
+// 1 = kalau sampai NET_DHCP_FALLBACK_MS ms sejak boot belum ada lease
+//     (baik karena router tidak menjawab MAUPUN karena kabel tidak
+//     terpasang / link tidak naik), device pindah ke NET_STATIC_*. Baris
+//     "[NET] fallback static" muncul di serial.
+// 0 = perilaku lama: DHCP diulang terus tanpa batas, tanpa IP statis.
+// Hanya berlaku kalau NET_USE_DHCP == 1.
+#define NET_DHCP_FALLBACK_STATIC   1
+
+// Batas waktu sebelum pindah ke IP statis, dihitung dari BOOT (bukan dari
+// link up). Kalau link normal (naik dalam ~1-3 dtk), ada 2 percobaan
+// DISCOVER dalam rentang ini (diulang tiap 10 dtk). Naikkan kalau router/
+// switch kamu lambat menyala.
+#define NET_DHCP_FALLBACK_MS       15000UL
+
+// Setelah pindah ke IP statis, DHCP tetap dicoba lagi di belakang layar
+// tiap sekian ms (berguna kalau router baru menyala belakangan, mis. setelah
+// listrik mati). Kalau berhasil, IP statis otomatis diganti lease DHCP dan
+// baris "NET:" dicetak ulang. Isi 0 untuk berhenti mencoba setelah fallback
+// (IP statis dipakai sampai device di-reset).
+#define NET_DHCP_RETRY_AFTER_FALLBACK_MS  30000UL
+
+// Jeda (ms) setelah link BARU naik (kabel dicolok) sebelum DISCOVER dikirim,
+// supaya PHY/switch/router sempat settle. Saat link naik, DHCP dicari segera
+// - melewati jadwal retry di atas - walau sedang memakai IP statis cadangan.
+#define NET_DHCP_LINK_SETTLE_MS  1000UL
 
 // ---------------------------------------------------------------------
 // Renew DHCP otomatis saat link fisik pulih (opsional, lihat main.c)
